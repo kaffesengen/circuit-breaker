@@ -1,124 +1,258 @@
-"use client";
+'use client';
 
-import { useSearchParams } from "next/navigation";
-import { useEffect, useState, useRef, Suspense } from "react";
-import Peer, { DataConnection } from "peerjs";
+import { useState, useEffect } from 'react';
+import Peer from 'peerjs';
 
-function GameClient() {
-  const searchParams = useSearchParams();
-  const roomId = searchParams.get("room");
-  const name = searchParams.get("name");
+type PuzzleType = 'SEQUENCE' | 'MATH_LOCK' | 'PATTERN';
 
-  const [status, setStatus] = useState<"CONNECTING" | "CONNECTED" | "ERROR">("CONNECTING");
-  const [puzzleAnswer, setPuzzleAnswer] = useState("");
-  const [feedback, setFeedback] = useState<string | null>(null);
+export default function PlayPage() {
+  const [peer, setPeer] = useState<Peer | null>(null);
+  const [conn, setConn] = useState<any>(null);
+  const [hostId, setHostId] = useState('');
+  const [nickname, setNickname] = useState('');
+  const [connected, setConnected] = useState(false);
+  
+  // Game state
+  const [currentStage, setCurrentStage] = useState<number>(1);
+  const [puzzleType, setPuzzleType] = useState<PuzzleType>('SEQUENCE');
+  const [statusMessage, setStatusMessage] = useState('');
 
-  const connRef = useRef<DataConnection | null>(null);
-  const peerRef = useRef<Peer | null>(null);
+  // Puzzle 1: Sequence State
+  const targetSequence = ['RED', 'BLUE', 'GREEN', 'YELLOW'];
+  const [userSequence, setUserSequence] = useState<string[]>([]);
+
+  // Puzzle 2: Math Lock State
+  // Ligning: (X * 3) - 4 = 11 -> X = 5
+  const [mathInput, setMathInput] = useState('');
+
+  // Puzzle 3: Pattern Toggle State (3x3 grid, mål: alle TRUE)
+  const [grid, setGrid] = useState<boolean[]>([
+    true, false, true,
+    false, true, false,
+    true, false, true
+  ]);
 
   useEffect(() => {
-    if (!roomId || !name) return;
+    const newPeer = new Peer();
+    setPeer(newPeer);
+    return () => newPeer.destroy();
+  }, []);
 
-    const peer = new Peer();
-    peerRef.current = peer;
-
-    peer.on("open", () => {
-      const conn = peer.connect(`CB-${roomId}`);
-      connRef.current = conn;
-
-      conn.on("open", () => {
-        setStatus("CONNECTED");
-        conn.send({ type: "JOIN", name });
-      });
-
-      conn.on("data", (data: any) => {
-        if (data.type === "RESULT") {
-          setFeedback(data.correct ? "Riktig svar!" : "Feil! Prøv igjen.");
-          setTimeout(() => setFeedback(null), 2000);
-        }
-      });
-
-      conn.on("error", () => setStatus("ERROR"));
+  const joinGame = () => {
+    if (!peer || !hostId || !nickname) return;
+    const connection = peer.connect(hostId);
+    
+    connection.on('open', () => {
+      setConn(connection);
+      setConnected(true);
+      connection.send({ type: 'JOIN', nickname });
     });
-
-    return () => {
-      peer.destroy();
-    };
-  }, [roomId, name]);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!connRef.current || !puzzleAnswer) return;
-
-    // Eksempel-logikk: Sjekk om svar er 42
-    const isCorrect = puzzleAnswer.trim() === "42";
-
-    connRef.current.send({
-      type: "SUBMIT_ANSWER",
-      name,
-      correct: isCorrect,
-    });
-
-    setPuzzleAnswer("");
   };
 
-  if (status === "CONNECTING") {
+  const notifyHostSuccess = () => {
+    if (conn) {
+      conn.send({ type: 'PUZZLE_SOLVED', stage: currentStage });
+    }
+  };
+
+  // --- PUZZLE 1 LOGIC: Sequence ---
+  const handleColorClick = (color: string) => {
+    const nextSeq = [...userSequence, color];
+    setUserSequence(nextSeq);
+
+    const index = nextSeq.length - 1;
+    if (nextSeq[index] !== targetSequence[index]) {
+      setStatusMessage('Feil sekvens! Prøv igjen.');
+      setUserSequence([]);
+      return;
+    }
+
+    if (nextSeq.length === targetSequence.length) {
+      setStatusMessage('Korrekt!');
+      notifyHostSuccess();
+      setTimeout(() => {
+        setUserSequence([]);
+        setStatusMessage('');
+        setPuzzleType('MATH_LOCK');
+        setCurrentStage(2);
+      }, 1000);
+    }
+  };
+
+  // --- PUZZLE 2 LOGIC: Math Lock ---
+  const handleMathSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (mathInput.trim() === '5') {
+      setStatusMessage('Korrekt kode!');
+      notifyHostSuccess();
+      setTimeout(() => {
+        setMathInput('');
+        setStatusMessage('');
+        setPuzzleType('PATTERN');
+        setCurrentStage(3);
+      }, 1000);
+    } else {
+      setStatusMessage('Feil kode! Regn på nytt.');
+      setMathInput('');
+    }
+  };
+
+  // --- PUZZLE 3 LOGIC: Pattern Grid ---
+  const toggleCell = (index: number) => {
+    const newGrid = [...grid];
+    newGrid[index] = !newGrid[index];
+    
+    // Toggle naboer (kors-mønster)
+    const neighbors = [];
+    if (index % 3 > 0) neighbors.push(index - 1); // Venstre
+    if (index % 3 < 2) neighbors.push(index + 1); // Høyre
+    if (index >= 3) neighbors.push(index - 3);     // Opp
+    if (index < 6) neighbors.push(index + 3);      // Ned
+
+    neighbors.forEach(n => {
+      newGrid[n] = !newGrid[n];
+    });
+
+    setGrid(newGrid);
+
+    if (newGrid.every(cell => cell === true)) {
+      setStatusMessage('Spenning gjenopprettet!');
+      notifyHostSuccess();
+      setTimeout(() => {
+        setStatusMessage('Alle oppgaver fullført!');
+      }, 1000);
+    }
+  };
+
+  if (!connected) {
     return (
-      <main className="min-h-screen bg-black text-green-500 font-mono flex items-center justify-center p-4">
-        <p className="animate-pulse">Kobler til rom {roomId}...</p>
+      <main className="flex min-h-screen flex-col items-center justify-center p-6 bg-slate-900 text-white">
+        <h1 className="text-2xl font-bold mb-6">Koble til storskjerm</h1>
+        <div className="w-full max-w-xs space-y-4">
+          <input
+            type="text"
+            placeholder="Rom-ID (fra storskjerm)"
+            value={hostId}
+            onChange={(e) => setHostId(e.target.value)}
+            className="w-full p-3 rounded bg-slate-800 border border-slate-700 text-white uppercase"
+          />
+          <input
+            type="text"
+            placeholder="Ditt kallenavn"
+            value={nickname}
+            onChange={(e) => setNickname(e.target.value)}
+            className="w-full p-3 rounded bg-slate-800 border border-slate-700 text-white"
+          />
+          <button
+            onClick={joinGame}
+            className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 font-bold rounded"
+          >
+            Bli med
+          </button>
+        </div>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-green-500 font-mono p-4 flex flex-col justify-between">
-      {/* Header */}
-      <div className="border-b border-green-900 pb-2 flex justify-between items-center text-xs">
-        <span>SPILLER: {name}</span>
-        <span>ROM: {roomId}</span>
-      </div>
+    <main className="flex min-h-screen flex-col items-center justify-between p-6 bg-slate-950 text-white">
+      <header className="w-full text-center border-b border-slate-800 pb-4">
+        <span className="text-xs text-emerald-400 font-mono">STATUS: TILKOBLET</span>
+        <h2 className="text-lg font-bold">Nivå {currentStage} av 3</h2>
+      </header>
 
-      {/* Oppgave-område */}
-      <div className="my-auto border border-green-500/30 bg-black p-6 rounded-lg text-center space-y-4">
-        <h2 className="text-xs uppercase text-green-700 tracking-widest">Aktiv Sekvens</h2>
-        <p className="text-xl text-white font-bold">Hva er svaret på alt?</p>
-        <p className="text-xs text-neutral-500">(Eksempel-puzzle: Tast inn 42)</p>
+      <div className="w-full max-w-xs my-auto">
+        {statusMessage && (
+          <p className="text-center font-bold mb-4 text-amber-400 animate-pulse">
+            {statusMessage}
+          </p>
+        )}
 
-        <form onSubmit={handleSubmit} className="space-y-4 pt-4">
-          <input
-            type="number"
-            value={puzzleAnswer}
-            onChange={(e) => setPuzzleAnswer(e.target.value)}
-            placeholder="Svar..."
-            className="w-full bg-neutral-900 border border-green-500/50 rounded px-3 py-3 text-center text-2xl text-green-400 focus:outline-none"
-          />
-          <button
-            type="submit"
-            className="w-full bg-green-600 text-black font-bold py-3 rounded uppercase tracking-wider"
-          >
-            Send Svar
-          </button>
-        </form>
+        {/* PUZZLE 1: COLOR SEQUENCE */}
+        {puzzleType === 'SEQUENCE' && (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-400 text-center">
+              Trykk knappene i riktig rekkefølge: <br />
+              <span className="font-mono text-xs text-slate-500">[Rød $\rightarrow$ Blå $\rightarrow$ Grønn $\rightarrow$ Gul]</span>
+            </p>
+            <div className="grid grid-cols-2 gap-4">
+              <button
+                onClick={() => handleColorClick('RED')}
+                className="h-24 bg-red-600 active:bg-red-700 rounded-lg font-bold text-lg"
+              >
+                RØD
+              </button>
+              <button
+                onClick={() => handleColorClick('BLUE')}
+                className="h-24 bg-blue-600 active:bg-blue-700 rounded-lg font-bold text-lg"
+              >
+                BLÅ
+              </button>
+              <button
+                onClick={() => handleColorClick('GREEN')}
+                className="h-24 bg-emerald-600 active:bg-emerald-700 rounded-lg font-bold text-lg"
+              >
+                GRØNN
+              </button>
+              <button
+                onClick={() => handleColorClick('YELLOW')}
+                className="h-24 bg-amber-500 active:bg-amber-600 rounded-lg font-bold text-lg"
+              >
+                GUL
+              </button>
+            </div>
+          </div>
+        )}
 
-        {feedback && (
-          <div className={`p-2 rounded text-sm font-bold ${feedback.includes("Riktig") ? "bg-green-900 text-green-200" : "bg-red-900 text-red-200"}`}>
-            {feedback}
+        {/* PUZZLE 2: MATH LOCK */}
+        {puzzleType === 'MATH_LOCK' && (
+          <form onSubmit={handleMathSubmit} className="space-y-4 text-center">
+            <p className="text-sm text-slate-400">Løs ligningen for å låse opp kretsen:</p>
+            <div className="p-4 bg-slate-900 rounded font-mono text-xl border border-slate-800">
+              (X &times; 3) - 4 = 11
+            </div>
+            <input
+              type="number"
+              placeholder="Hva er X?"
+              value={mathInput}
+              onChange={(e) => setMathInput(e.target.value)}
+              className="w-full p-3 rounded bg-slate-800 border border-slate-700 text-center text-xl font-mono"
+            />
+            <button
+              type="submit"
+              className="w-full py-3 bg-blue-600 hover:bg-blue-500 font-bold rounded"
+            >
+              Lås opp
+            </button>
+          </form>
+        )}
+
+        {/* PUZZLE 3: PATTERN GRID */}
+        {puzzleType === 'PATTERN' && (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-400 text-center">
+              Slå på alle bryterne. Å trykke på én snur også naboene.
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              {grid.map((active, i) => (
+                <button
+                  key={i}
+                  onClick={() => toggleCell(i)}
+                  className={`h-20 rounded-lg font-mono font-bold text-xl transition-colors ${
+                    active ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-slate-600'
+                  }`}
+                >
+                  {active ? 'ON' : 'OFF'}
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </div>
 
-      {/* Footer */}
-      <div className="text-center text-[10px] text-neutral-600 uppercase">
-        Circuit Breaker // Terminal Node
-      </div>
+      <footer className="w-full text-center text-xs text-slate-600">
+        Circuit Breaker Controller
+      </footer>
     </main>
-  );
-}
-
-export default function PlayPage() {
-  return (
-    <Suspense fallback={<div className="bg-black min-h-screen text-green-500 p-4">Laster...</div>}>
-      <GameClient />
-    </Suspense>
   );
 }
