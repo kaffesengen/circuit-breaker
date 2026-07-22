@@ -5,6 +5,20 @@ import Peer from 'peerjs';
 
 type PuzzleType = 'SEQUENCE' | 'MATH_LOCK' | 'PATTERN';
 
+const ALL_COLORS = ['RED', 'BLUE', 'GREEN', 'YELLOW'];
+const COLOR_NAMES: Record<string, string> = { RED: 'Rød', BLUE: 'Blå', GREEN: 'Grønn', YELLOW: 'Gul' };
+
+// Hjelpefunksjon for rutenett (toggle + naboer)
+const toggleGridIndices = (grid: boolean[], index: number) => {
+  const newGrid = [...grid];
+  newGrid[index] = !newGrid[index];
+  if (index % 3 > 0) newGrid[index - 1] = !newGrid[index - 1];
+  if (index % 3 < 2) newGrid[index + 1] = !newGrid[index + 1];
+  if (index >= 3) newGrid[index - 3] = !newGrid[index - 3];
+  if (index < 6) newGrid[index + 3] = !newGrid[index + 3];
+  return newGrid;
+};
+
 export default function PlayPage() {
   const [peer, setPeer] = useState<Peer | null>(null);
   const [conn, setConn] = useState<any>(null);
@@ -16,24 +30,53 @@ export default function PlayPage() {
   const [puzzleType, setPuzzleType] = useState<PuzzleType>('SEQUENCE');
   const [statusMessage, setStatusMessage] = useState('');
 
-  const targetSequence = ['RED', 'BLUE', 'GREEN', 'YELLOW'];
+  // Dynamiske puslespill-statuser
+  const [targetSequence, setTargetSequence] = useState<string[]>([]);
   const [userSequence, setUserSequence] = useState<string[]>([]);
+  
+  const [mathEq, setMathEq] = useState({ A: 0, B: 0, C: 0, targetX: '0' });
   const [mathInput, setMathInput] = useState('');
-  const [grid, setGrid] = useState<boolean[]>([
-    true, false, true,
-    false, true, false,
-    true, false, true
-  ]);
+  
+  const [grid, setGrid] = useState<boolean[]>(Array(9).fill(false));
 
   useEffect(() => {
     const newPeer = new Peer();
     setPeer(newPeer);
+    
+    // Generer unike puslespill
+    generatePuzzles();
+
     return () => newPeer.destroy();
   }, []);
 
+  const generatePuzzles = () => {
+    // 1. Sekvens
+    const seq = Array.from({ length: 4 }, () => ALL_COLORS[Math.floor(Math.random() * ALL_COLORS.length)]);
+    setTargetSequence(seq);
+
+    // 2. Matte: (X * A) - B = C. Mål er å finne X.
+    const xVal = Math.floor(Math.random() * 9) + 1; // 1-9
+    const aVal = Math.floor(Math.random() * 4) + 2; // 2-5
+    const bVal = Math.floor(Math.random() * 10) + 1; // 1-10
+    const cVal = (xVal * aVal) - bVal;
+    setMathEq({ A: aVal, B: bVal, C: cVal, targetX: xVal.toString() });
+
+    // 3. Grid: Start løst (true), simuler 5-10 trykk baklengs for å sikre løsbarhet
+    let generatedGrid = Array(9).fill(true);
+    const shuffles = Math.floor(Math.random() * 6) + 5;
+    for (let i = 0; i < shuffles; i++) {
+      generatedGrid = toggleGridIndices(generatedGrid, Math.floor(Math.random() * 9));
+    }
+    // Hvis den endte opp løst, slå av en knapp
+    if (generatedGrid.every(c => c === true)) {
+      generatedGrid = toggleGridIndices(generatedGrid, 4);
+    }
+    setGrid(generatedGrid);
+  };
+
   const joinGame = () => {
     if (!peer || !hostId || !nickname) return;
-    const connection = peer.connect(hostId);
+    const connection = peer.connect(hostId.toUpperCase());
     
     connection.on('open', () => {
       setConn(connection);
@@ -48,20 +91,16 @@ export default function PlayPage() {
     }
   };
 
-  // --- WEB AUDIO API: Lydgenerator ---
   const playTone = (type: 'success' | 'error') => {
     const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioContext) return;
-    
     const ctx = new AudioContext();
     const osc = ctx.createOscillator();
     const gainNode = ctx.createGain();
-
     osc.connect(gainNode);
     gainNode.connect(ctx.destination);
 
     if (type === 'success') {
-      // Lys, stigende pipetone
       osc.type = 'sine';
       osc.frequency.setValueAtTime(600, ctx.currentTime);
       osc.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.1);
@@ -70,7 +109,6 @@ export default function PlayPage() {
       osc.start();
       osc.stop(ctx.currentTime + 0.2);
     } else {
-      // Lav, skurrende feiltone
       osc.type = 'sawtooth';
       osc.frequency.setValueAtTime(150, ctx.currentTime);
       gainNode.gain.setValueAtTime(0.5, ctx.currentTime);
@@ -80,7 +118,6 @@ export default function PlayPage() {
     }
   };
 
-  // --- PUZZLE 1: Sequence ---
   const handleColorClick = (color: string) => {
     const nextSeq = [...userSequence, color];
     setUserSequence(nextSeq);
@@ -106,10 +143,9 @@ export default function PlayPage() {
     }
   };
 
-  // --- PUZZLE 2: Math Lock ---
   const handleMathSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (mathInput.trim() === '5') {
+    if (mathInput.trim() === mathEq.targetX) {
       playTone('success');
       setStatusMessage('Korrekt kode!');
       notifyHostSuccess();
@@ -126,24 +162,10 @@ export default function PlayPage() {
     }
   };
 
-  // --- PUZZLE 3: Pattern Grid ---
   const toggleCell = (index: number) => {
-    const newGrid = [...grid];
-    newGrid[index] = !newGrid[index];
-    
-    const neighbors = [];
-    if (index % 3 > 0) neighbors.push(index - 1); 
-    if (index % 3 < 2) neighbors.push(index + 1); 
-    if (index >= 3) neighbors.push(index - 3);     
-    if (index < 6) neighbors.push(index + 3);      
-
-    neighbors.forEach(n => {
-      newGrid[n] = !newGrid[n];
-    });
-
+    const newGrid = toggleGridIndices(grid, index);
     setGrid(newGrid);
 
-    // Sjekk om alle er TRUE
     if (newGrid.every(cell => cell === true)) {
       playTone('success');
       setStatusMessage('Spenning gjenopprettet!');
@@ -152,7 +174,6 @@ export default function PlayPage() {
         setStatusMessage('Alle oppgaver fullført!');
       }, 1000);
     } else {
-      // Gir en kort mekanisk klikkelyd ved navigering
       const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
       if (AudioContext) {
         const ctx = new AudioContext();
@@ -177,7 +198,7 @@ export default function PlayPage() {
         <div className="w-full max-w-xs space-y-4">
           <input
             type="text"
-            placeholder="Rom-ID (fra storskjerm)"
+            placeholder="Rom-ID"
             value={hostId}
             onChange={(e) => setHostId(e.target.value)}
             className="w-full p-3 rounded bg-slate-800 border border-slate-700 text-white uppercase"
@@ -189,10 +210,7 @@ export default function PlayPage() {
             onChange={(e) => setNickname(e.target.value)}
             className="w-full p-3 rounded bg-slate-800 border border-slate-700 text-white"
           />
-          <button
-            onClick={joinGame}
-            className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 font-bold rounded"
-          >
+          <button onClick={joinGame} className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 font-bold rounded">
             Bli med
           </button>
         </div>
@@ -218,7 +236,9 @@ export default function PlayPage() {
           <div className="space-y-4">
             <p className="text-sm text-slate-400 text-center">
               Trykk knappene i riktig rekkefølge: <br />
-              <span className="font-mono text-xs text-slate-500">[Rød $\rightarrow$ Blå $\rightarrow$ Grønn $\rightarrow$ Gul]</span>
+              <span className="font-mono text-xs text-slate-500">
+                [{targetSequence.map(c => COLOR_NAMES[c]).join(' -> ')}]
+              </span>
             </p>
             <div className="grid grid-cols-2 gap-4">
               <button onClick={() => handleColorClick('RED')} className="h-24 bg-red-600 active:bg-red-700 rounded-lg font-bold text-lg">RØD</button>
@@ -233,7 +253,7 @@ export default function PlayPage() {
           <form onSubmit={handleMathSubmit} className="space-y-4 text-center">
             <p className="text-sm text-slate-400">Løs ligningen for å låse opp kretsen:</p>
             <div className="p-4 bg-slate-900 rounded font-mono text-xl border border-slate-800">
-              (X &times; 3) - 4 = 11
+              (X &times; {mathEq.A}) {mathEq.B < 0 ? '+' : '-'} {Math.abs(mathEq.B)} = {mathEq.C}
             </div>
             <input
               type="number"
