@@ -12,20 +12,13 @@ export default function PlayPage() {
   const [nickname, setNickname] = useState('');
   const [connected, setConnected] = useState(false);
   
-  // Game state
   const [currentStage, setCurrentStage] = useState<number>(1);
   const [puzzleType, setPuzzleType] = useState<PuzzleType>('SEQUENCE');
   const [statusMessage, setStatusMessage] = useState('');
 
-  // Puzzle 1: Sequence State
   const targetSequence = ['RED', 'BLUE', 'GREEN', 'YELLOW'];
   const [userSequence, setUserSequence] = useState<string[]>([]);
-
-  // Puzzle 2: Math Lock State
-  // Ligning: (X * 3) - 4 = 11 -> X = 5
   const [mathInput, setMathInput] = useState('');
-
-  // Puzzle 3: Pattern Toggle State (3x3 grid, mål: alle TRUE)
   const [grid, setGrid] = useState<boolean[]>([
     true, false, true,
     false, true, false,
@@ -55,19 +48,53 @@ export default function PlayPage() {
     }
   };
 
-  // --- PUZZLE 1 LOGIC: Sequence ---
+  // --- WEB AUDIO API: Lydgenerator ---
+  const playTone = (type: 'success' | 'error') => {
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContext) return;
+    
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+
+    osc.connect(gainNode);
+    gainNode.connect(ctx.destination);
+
+    if (type === 'success') {
+      // Lys, stigende pipetone
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(600, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.1);
+      gainNode.gain.setValueAtTime(0.5, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.2);
+    } else {
+      // Lav, skurrende feiltone
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(150, ctx.currentTime);
+      gainNode.gain.setValueAtTime(0.5, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.3);
+    }
+  };
+
+  // --- PUZZLE 1: Sequence ---
   const handleColorClick = (color: string) => {
     const nextSeq = [...userSequence, color];
     setUserSequence(nextSeq);
 
     const index = nextSeq.length - 1;
     if (nextSeq[index] !== targetSequence[index]) {
+      playTone('error');
       setStatusMessage('Feil sekvens! Prøv igjen.');
       setUserSequence([]);
       return;
     }
 
     if (nextSeq.length === targetSequence.length) {
+      playTone('success');
       setStatusMessage('Korrekt!');
       notifyHostSuccess();
       setTimeout(() => {
@@ -79,10 +106,11 @@ export default function PlayPage() {
     }
   };
 
-  // --- PUZZLE 2 LOGIC: Math Lock ---
+  // --- PUZZLE 2: Math Lock ---
   const handleMathSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (mathInput.trim() === '5') {
+      playTone('success');
       setStatusMessage('Korrekt kode!');
       notifyHostSuccess();
       setTimeout(() => {
@@ -92,22 +120,22 @@ export default function PlayPage() {
         setCurrentStage(3);
       }, 1000);
     } else {
+      playTone('error');
       setStatusMessage('Feil kode! Regn på nytt.');
       setMathInput('');
     }
   };
 
-  // --- PUZZLE 3 LOGIC: Pattern Grid ---
+  // --- PUZZLE 3: Pattern Grid ---
   const toggleCell = (index: number) => {
     const newGrid = [...grid];
     newGrid[index] = !newGrid[index];
     
-    // Toggle naboer (kors-mønster)
     const neighbors = [];
-    if (index % 3 > 0) neighbors.push(index - 1); // Venstre
-    if (index % 3 < 2) neighbors.push(index + 1); // Høyre
-    if (index >= 3) neighbors.push(index - 3);     // Opp
-    if (index < 6) neighbors.push(index + 3);      // Ned
+    if (index % 3 > 0) neighbors.push(index - 1); 
+    if (index % 3 < 2) neighbors.push(index + 1); 
+    if (index >= 3) neighbors.push(index - 3);     
+    if (index < 6) neighbors.push(index + 3);      
 
     neighbors.forEach(n => {
       newGrid[n] = !newGrid[n];
@@ -115,12 +143,30 @@ export default function PlayPage() {
 
     setGrid(newGrid);
 
+    // Sjekk om alle er TRUE
     if (newGrid.every(cell => cell === true)) {
+      playTone('success');
       setStatusMessage('Spenning gjenopprettet!');
       notifyHostSuccess();
       setTimeout(() => {
         setStatusMessage('Alle oppgaver fullført!');
       }, 1000);
+    } else {
+      // Gir en kort mekanisk klikkelyd ved navigering
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContext) {
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(100, ctx.currentTime);
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.05);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.05);
+      }
     }
   };
 
@@ -163,12 +209,11 @@ export default function PlayPage() {
 
       <div className="w-full max-w-xs my-auto">
         {statusMessage && (
-          <p className="text-center font-bold mb-4 text-amber-400 animate-pulse">
+          <p className={`text-center font-bold mb-4 ${statusMessage.includes('Feil') ? 'text-red-500' : 'text-amber-400 animate-pulse'}`}>
             {statusMessage}
           </p>
         )}
 
-        {/* PUZZLE 1: COLOR SEQUENCE */}
         {puzzleType === 'SEQUENCE' && (
           <div className="space-y-4">
             <p className="text-sm text-slate-400 text-center">
@@ -176,35 +221,14 @@ export default function PlayPage() {
               <span className="font-mono text-xs text-slate-500">[Rød $\rightarrow$ Blå $\rightarrow$ Grønn $\rightarrow$ Gul]</span>
             </p>
             <div className="grid grid-cols-2 gap-4">
-              <button
-                onClick={() => handleColorClick('RED')}
-                className="h-24 bg-red-600 active:bg-red-700 rounded-lg font-bold text-lg"
-              >
-                RØD
-              </button>
-              <button
-                onClick={() => handleColorClick('BLUE')}
-                className="h-24 bg-blue-600 active:bg-blue-700 rounded-lg font-bold text-lg"
-              >
-                BLÅ
-              </button>
-              <button
-                onClick={() => handleColorClick('GREEN')}
-                className="h-24 bg-emerald-600 active:bg-emerald-700 rounded-lg font-bold text-lg"
-              >
-                GRØNN
-              </button>
-              <button
-                onClick={() => handleColorClick('YELLOW')}
-                className="h-24 bg-amber-500 active:bg-amber-600 rounded-lg font-bold text-lg"
-              >
-                GUL
-              </button>
+              <button onClick={() => handleColorClick('RED')} className="h-24 bg-red-600 active:bg-red-700 rounded-lg font-bold text-lg">RØD</button>
+              <button onClick={() => handleColorClick('BLUE')} className="h-24 bg-blue-600 active:bg-blue-700 rounded-lg font-bold text-lg">BLÅ</button>
+              <button onClick={() => handleColorClick('GREEN')} className="h-24 bg-emerald-600 active:bg-emerald-700 rounded-lg font-bold text-lg">GRØNN</button>
+              <button onClick={() => handleColorClick('YELLOW')} className="h-24 bg-amber-500 active:bg-amber-600 rounded-lg font-bold text-lg">GUL</button>
             </div>
           </div>
         )}
 
-        {/* PUZZLE 2: MATH LOCK */}
         {puzzleType === 'MATH_LOCK' && (
           <form onSubmit={handleMathSubmit} className="space-y-4 text-center">
             <p className="text-sm text-slate-400">Løs ligningen for å låse opp kretsen:</p>
@@ -218,16 +242,12 @@ export default function PlayPage() {
               onChange={(e) => setMathInput(e.target.value)}
               className="w-full p-3 rounded bg-slate-800 border border-slate-700 text-center text-xl font-mono"
             />
-            <button
-              type="submit"
-              className="w-full py-3 bg-blue-600 hover:bg-blue-500 font-bold rounded"
-            >
+            <button type="submit" className="w-full py-3 bg-blue-600 hover:bg-blue-500 font-bold rounded">
               Lås opp
             </button>
           </form>
         )}
 
-        {/* PUZZLE 3: PATTERN GRID */}
         {puzzleType === 'PATTERN' && (
           <div className="space-y-4">
             <p className="text-sm text-slate-400 text-center">
